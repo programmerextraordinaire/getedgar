@@ -1,2 +1,2 @@
 # getedgar
-Download EDGAR data
+Download and parse EDGAR data from the SEC website.
