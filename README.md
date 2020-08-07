@@ -1,0 +1,2 @@
+# getedgar
+Download EDGAR data
