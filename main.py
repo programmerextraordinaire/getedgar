@@ -6,37 +6,32 @@ Main program to download and parse EDGAR data from the SEC website.
 
 --tkp
 
+History
+=======
 2020-08-07  Init commit - Q1 2018 had 7073 Form D filings
+2020-08-24  Auto create folders and update downloads accordingly.
 
-Amt: $ 0/tTotal:$ 20,578,438,852
-https://www.sec.gov/Archives/edgar/data/1729436/000172943618000001/xslFormDX01/primary_doc.xml
-https://www.sec.gov/Archives/edgar/data/1729436/000172943618000001/primary_doc.xml
-Traceback (most recent call last):
-  File "c:\Projects\Sandbox\EDGAR\getedgar\main.py", line 155, in <module>
-    main()
-  File "C:\Projects\Sandbox\EDGAR\getedgar\.venv\lib\site-packages\click\core.py", line 829, in __call__
-    return self.main(*args, **kwargs)
-  File "C:\Projects\Sandbox\EDGAR\getedgar\.venv\lib\site-packages\click\core.py", line 782, in main
-    rv = self.invoke(ctx)
-  File "C:\Projects\Sandbox\EDGAR\getedgar\.venv\lib\site-packages\click\core.py", line 1066, in invoke
-    return ctx.invoke(self.callback, **ctx.params)
-  File "C:\Projects\Sandbox\EDGAR\getedgar\.venv\lib\site-packages\click\core.py", line 610, in invoke
-    return callback(*args, **kwargs)
-  File "c:\Projects\Sandbox\EDGAR\getedgar\main.py", line 150, in main
-    parse_filings(results, True)        # Process all
-  File "c:\Projects\Sandbox\EDGAR\getedgar\main.py", line 127, in parse_filings
-    if (soup.edgarsubmission.offeringdata.offeringsalesamounts.totalamountsold is not None):
-AttributeError: 'NoneType' object has no attribute 'offeringdata'
+Results
+=======
+2018 Q1 7073/7073 Amt: $ 14,041,340  Total:$ 170,757,404,165
+2018 Q3 6930/6930 Amt: $ 4,000,000  Total:$ 162,789,356,396
+2018 Q4 6967/6967 Amt: $ 500,000  Total:$ 128,541,125,614
 
+2019 Q1 6792/6792 Amt: $ 0  Total:$ 142,686,633,697
+2019-Q4 6915/6915 Amt: $ 40,000  Total:$ 121,241,062,684
 
-
+2020-Q1 7276/7276 Amt: $ 835,000  Total:$ 134,266,883,951
+2020-Q2 6014/6014 Amt: $ 263,207  Total:$ 113,471,132,489
+2020-Q3 3307/3307 Amt: $ 5,525,959  Total:$ 60,768,580,776
 """
 
 
 import datetime
+import os
 from bs4 import BeautifulSoup   # https://www.crummy.com/software/BeautifulSoup/bs4/doc/
-import click        # https://click.palletsprojects.com/en/7.x/
-import requests     # https://2.python-requests.org/en/master/
+import click                    # https://click.palletsprojects.com/en/7.x/
+import requests                 # https://2.python-requests.org/en/master/
+
 
 
 class Filing:
@@ -46,19 +41,23 @@ class Filing:
         self.amount = amount    # Decimal? Int?
 
 
-
 # Generate the list of index files archived in EDGAR since start_year (earliest: 1993) until the most recent quarter
-def get_urls():
+# Return dictionary of d[filepath] = url
+def get_urls(start_year = None):
     current_year = datetime.date.today().year
     current_quarter = (datetime.date.today().month - 1) // 3 + 1
-    start_year = 2018
+    if start_year is None:
+        start_year = 2017
     years = list(range(start_year, current_year))
     quarters = ['QTR1', 'QTR2', 'QTR3', 'QTR4']
+
+    # Get the history, and append this year until the current quarter.
     history = [(y, q) for y in years for q in quarters]
     for i in range(1, current_quarter + 1):
         history.append((current_year, 'QTR%d' % i))
-    urls = ['https://www.sec.gov/Archives/edgar/full-index/%d/%s/crawler.idx' % (x[0], x[1]) for x in history]
-    urls.sort()
+    
+    # Get the urls - if Python 3.7 or later they should be in order.
+    urls = {f'{y}-Q{q[-1]}': 'https://www.sec.gov/Archives/edgar/full-index/%d/%s/crawler.idx' % (y, q) for y,q in history}
     return urls
 
 
@@ -107,49 +106,46 @@ def get_xml(url, verbose=False):
     return xml
 
 
-example_html = """
-<table class="tableFile" summary="Document Format Files">
-         <tbody><tr>
-            <th scope="col" style="width: 5%;"><acronym title="Sequence Number">Seq</acronym></th>
-            <th scope="col" style="width: 40%;">Description</th>
-            <th scope="col" style="width: 20%;">Document</th>
-            <th scope="col" style="width: 10%;">Type</th>
-            <th scope="col">Size</th>
-         </tr>
-         <tr>
-            <td scope="row">1</td>
-            <td scope="row"></td>
-            <td scope="row"><a href="/Archives/edgar/data/1566610/000149315218001873/xslFormDX01/primary_doc.xml">primary_doc.html</a></td>
-            <td scope="row">D</td>
-            <td scope="row">&nbsp;</td>
-         </tr>
-         <tr class="blueRow">
-            <td scope="row">1</td>
-            <td scope="row"></td>
-            <td scope="row"><a href="/Archives/edgar/data/1566610/000149315218001873/primary_doc.xml">primary_doc.xml</a></td>
-            <td scope="row">D</td>
-            <td scope="row">4850</td>
-         </tr>
-         <tr>
-            <td scope="row">&nbsp;</td>
-            <td scope="row">Complete submission text file</td>
-            <td scope="row"><a href="/Archives/edgar/data/1566610/000149315218001873/0001493152-18-001873.txt">0001493152-18-001873.txt</a></td>
-            <td scope="row">&nbsp;</td>
-            <td scope="row">6167</td>
-         </tr>
-      </tbody></table>
-"""
-def parse_filings(filings, verbose=False):
+def parse_filings(path, filings, verbose=False):
+    # Make sure the path exists.
+    if verbose: print(path)
+    if not os.path.exists(path):
+        os.makedirs(path)
+        if verbose: print("Path did NOT exist - just made: " + path)
+    
     total = 0
+    num_filings = len(filings)
+    i = 0
     for line in filings:
+        i += 1
         url = line[98:].strip()
-        xml = get_xml(url, verbose=False)
-        #if verbose: print(xml)
-        soup = BeautifulSoup(xml, 'lxml')
-        if (soup.edgarsubmission.offeringdata.offeringsalesamounts.totalamountsold is not None):
-            amt = int(soup.edgarsubmission.offeringdata.offeringsalesamounts.totalamountsold.string)
-            total += amt
-            if verbose: print("Amt: $ {0:,}/tTotal:$ {1:,}".format(amt, total))
+        # Create the file name
+        xml = ''
+        parts = url.split('/')
+        filename = r"{0}/{1}_{2}.xml".format(path, i, parts[-1])
+        if verbose: print("Filename = " + filename)
+        if os.path.isfile(filename):
+            with open(filename) as fr:
+                xml = fr.read()
+        else:
+            xml = get_xml(url, verbose=False)
+            # Save the XML file
+            if xml is not None:
+                with open(filename, "wt") as fh:
+                    fh.write(xml)
+        if verbose: print(xml)
+        try:
+            soup = BeautifulSoup(xml, 'lxml')
+            if (soup.edgarsubmission.offeringdata.offeringsalesamounts.totalamountsold is not None):
+                amt = int(soup.edgarsubmission.offeringdata.offeringsalesamounts.totalamountsold.string)
+                total += amt
+                #if verbose: print("{0}/{1} Amt: $ {2:,}  Total:$ {3:,}".format(i, num_filings, amt, total))
+                print("{0}/{1} Amt: $ {2:,}  Total:$ {3:,}".format(i, num_filings, amt, total))
+        except AttributeError:
+            print("Error in line: " + line)
+        except TypeError:
+            print("Error in line: " + line)
+            
     print("Total amount: $ {0}".format(total))
 
 
@@ -157,19 +153,20 @@ def parse_filings(filings, verbose=False):
 def main(filter='D'):
     """Simple program that downloads and parses SEC EDGAR data."""
     click.echo("Downloading EDGAR Form %s" % filter)
-    urls = get_urls()
+    urls = get_urls(2017)
     print("Downloaded {0} URLs".format(len(urls)))
-    url = urls[0]
-    print(url)
-    req = requests.get(url)
-    print(req.status_code)
-    lines = req.text.splitlines()[9:]   # Remove header
-    #filing_types = get_types(lines)
-    results = data_filter(filter, lines, False)
-    print("Found {0} results".format(len(results)))
-    #parse_filings(results[0:3], True)  # Process 1st 3
-    parse_filings(results, True)        # Process all
-    #print(req.text)
+    for path,url in urls.items():
+        print(url)
+        req = requests.get(url)
+        print(req.status_code)
+        lines = req.text.splitlines()[9:]   # Remove header
+        #filing_types = get_types(lines)
+        results = data_filter(filter, lines, False)
+        print("Found {0} results".format(len(results)))
+        #parse_filings(results[0:3], True)  # Process 1st 3
+        path = os.path.join('data', path)
+        parse_filings(path, results, False)        # Process all
+        #print(req.text)
 
 
 if __name__ == "__main__":
